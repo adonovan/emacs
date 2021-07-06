@@ -29,11 +29,6 @@
 ;;; https://docs.github.com/en/github/authenticating-to-github/keeping-your-account-and-data-secure/creating-a-personal-access-token
 
 ;;; TODO:
-;;; Bugs:
-;;; - eglot chokes on Go mode due to synthetic filenames.
-;;
-;;; Features:
-;;; - show only file base name in modeline.
 ;;; - show commit description in full when reviewing commits (not PRs).
 ;;; - show github.com/owner/repo and base/head hashes in session description.
 ;;; - allow github-ediff to accept just a PR number if the repo and
@@ -83,7 +78,7 @@ the commit or pull request identified by a GitHub `url'."
 	     (pull (github--fetch-json (format "https://api.github.com/repos/%s/%s/pulls/%s"
 					       owner
 					       repo
-					       index)))	    
+					       index)))
 	     (base-rev (alist-get 'sha (alist-get 'base pull)))
 	     (head-rev (alist-get 'sha (alist-get 'head pull))))
 	(github--ediff-compare owner repo base-rev head-rev
@@ -102,7 +97,7 @@ the commit or pull request identified by a GitHub `url'."
 			       (concat hash "^") ; base
 			       hash ; head
 			       (format "Git commit %.7s" hash))))
-     
+
      ;; Commit within PR, https://github.com/OWNER/REPO/pull/INDEX/commits/HASH
      ((string-match "https://github.com/\\(.*\\)/\\(.*\\)/pull/\\([0-9]+\\)/commits/\\([0-9a-f]+\\)$" url)
       (let* ((owner (match-string 1 url))
@@ -114,7 +109,7 @@ the commit or pull request identified by a GitHub `url'."
 			       (concat hash "^") ; base
 			       hash ; head
 			       (format "Git commit %.7s in PR#%s" hash index))))
-     
+
      (t
       (error "invalid GitHub pull request or commit URL: %s" url)))))
 
@@ -130,7 +125,7 @@ and `head-rev'."
 			 base-rev
 			 head-rev
 			 (format "git diff %s %s" base-rev head-rev)))
-    
+
 (defun github--ediff-compare (owner repo base-rev head-rev description)
   "Starts a multi-file ediff session on all the files changed
 between commits `base-rev' and `head-rev` in the GitHub `repo'
@@ -158,12 +153,11 @@ belonging to `owner'."
 	    (cond ((ediff-buffer-live-p session-buf)
 		   (ediff-with-current-buffer session-buf
 		     (setq ediff-mouse-pixel-position (mouse-pixel-position))
-		     (ediff-recenter 'no-rehighlight)))
-		  
+		     (ediff-recenter 'no-rehighlight)))	  
   		  (t
 		   (ediff-buffers
 		    (github--find-file owner repo fileA base-rev)
-		    (github--find-file owner repo fileB head-rev)		       
+		    (github--find-file owner repo fileB head-rev)
 		    ;; startup-hooks: ensure that 'q' quits the diff
 		    ;; and returns to next item in group session.
 		    (list #'(lambda ()
@@ -197,20 +191,28 @@ belonging to `owner'."
 	     (mapcar #'(lambda (it)
 			 (let ((filename (alist-get 'filename it)))
 			   (ediff-make-new-meta-list-element filename filename it)))
-		     (alist-get 'files compare)))     
-      "*GitHub ediff session" ; meta-buffer-name (prefix)       
+		     (alist-get 'files compare)))
+      "*GitHub ediff session" ; meta-buffer-name (prefix)
       #'github--ediff-redraw ; redraw-function displays session group buffer
       'ediff-pull-request ; a made-up jobname
       nil)))) ;; startup-hooks for group session
 
 (defun github--find-file (owner repo filename revision)
   "Returns a (possibly existing) buffer containing the contents of the specified file."
-  (let ((bufname (format "github.com/%s/%s@%s:/%s" owner repo revision filename)))
+  (let ((bufname (format "/github.com/%s/%s@%s:/%s" owner repo revision filename)))
     ;; Returns existing buffer, if any.
     ;; (Not sound if the revision is mutable, e.g. a tag or branch, not commit hash.)
     ;; Sharing file buffers means they cannot carry any state related to the parent session.
+    ;;
+    ;; The buffers created here are born with a unique name (bufname) but then reassociated
+    ;; with the git filename, but they are not truly visiting those (usually non-existent) files.
+    ;; (The buffer needs a file name so that set-auto-mode can choose a mode; we can't then
+    ;; remove the buffers' file name because the major mode may rely on it. For example, eglot's
+    ;; file-close hooks will fail if the buffer no longer has a file name.)
     (or (get-buffer bufname)
-	(with-current-buffer (get-buffer-create bufname)
+	(with-current-buffer (create-file-buffer bufname)
+          (setq buffer-file-name filename)
+
 	  ;; Decode body of HTTP response into current buffer.
 	  (let* ((url-buf
 		  (github--url-retrieve
@@ -226,18 +228,14 @@ belonging to `owner'."
 		  (url-insert url-buf)) ; decode UTF-8
 		 ((equal status 404) ; Not Found
 		  nil) ; treat addition or deletion as empty file
-		 (t	   
+		 (t
 		  (error "HTTP error %s in JSON RPC to %s" status url)))
 	      (kill-buffer url-buf)))
-	      
-	  ;; Post-process the buffer.
+
+	  ;; Infer major mode based on content.
+	  (set-auto-mode t)
 	  (read-only-mode t)
-	  ;; Temporarily associate a file name with the buffer so that we can infer the mode.
-	  (setq buffer-file-name filename)
-	  (unwind-protect
-	      (set-auto-mode t)
-	    (setq buffer-file-name nil))
-	  
+	  (set-buffer-modified-p nil)
 	  (current-buffer)))))
 
 (defun github--fetch-json (url)
@@ -247,7 +245,7 @@ belonging to `owner'."
     (let* ((url-buf (github--url-retrieve url))
 	   (status (with-current-buffer url-buf url-http-response-status)))
       (unwind-protect
-	  (cond 
+	  (cond
 	   ((equal status 200)
 	    (url-insert url-buf)) ; decode UTF-8
 	   ((equal status 403)
@@ -307,13 +305,13 @@ removing HTTP headers, and calling `url-insert' to decode the body."
 		  (setq json it)
 		  (puthash (alist-get 'sha it) it commit-table))
 	      (alist-get 'commits compare))
-	
+
 	;; Walk the first-parent chain starting from the last commit in the /compare JSON.
 	(while json
 	  (setq first-parent-chain (cons json first-parent-chain))
 	  (let ((hash (alist-get 'sha (aref (alist-get 'parents json) 0)))) ; first parent
 	    (setq json (gethash hash commit-table)))))
-      
+
       ;; Display hash, author, and truncated message of each commit.
       ;; Click/RET on a commit opens a github-ediff session for that standalone commit.
       ;; (We avoid overlays because ediff-next-meta-item assumes it knows all the overlays.)
@@ -324,11 +322,11 @@ removing HTTP headers, and calling `url-insert' to decode the body."
 	(define-key commit-keymap [mouse-1] 'github--activate-commit-overlay)
 	(mapc #'(lambda (it)
 		  (let* ((commit (alist-get 'commit it))
-			 (first-line (car (split-string (alist-get 'message commit) "\n"))) 
+			 (first-line (car (split-string (alist-get 'message commit) "\n")))
 			 (pt (point)))
 		    (insert (format "  %.7s %-16s   %.60s"
 				    (alist-get 'sha it)
-				    (alist-get 'name (alist-get 'author commit)) 
+				    (alist-get 'name (alist-get 'author commit))
 				    first-line))
 		    (put-text-property pt (point) 'mouse-face 'highlight)
 		    (put-text-property pt (point) 'commit-json it)
