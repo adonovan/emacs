@@ -194,24 +194,32 @@ belonging to `owner'."
 		     (alist-get 'files compare)))
       "*GitHub ediff session" ; meta-buffer-name (prefix)
       #'github--ediff-redraw ; redraw-function displays session group buffer
-      'ediff-pull-request ; a made-up jobname
+      'ediff-github-ediff ; made-up jobname (normally used in ediff-abbrev-jobname help message)
       nil)))) ;; startup-hooks for group session
 
 (defun github--find-file (owner repo filename revision)
   "Returns a (possibly existing) buffer containing the contents of the specified file."
-  (let ((bufname (format "/github.com/%s/%s@%s:/%s" owner repo revision filename)))
-    ;; Returns existing buffer, if any.
-    ;; (Not sound if the revision is mutable, e.g. a tag or branch, not commit hash.)
-    ;; Sharing file buffers means they cannot carry any state related to the parent session.
+  (let ((bufname (format "/github.com/%s/%s/%s/%s" owner repo revision filename)))
+    ;; Returns existing buffer, if any.  (Not sound if the revision is
+    ;; mutable, e.g. a tag or branch, not commit hash.)  Sharing file
+    ;; buffers means they cannot carry any state related to the parent
+    ;; session.
     ;;
-    ;; The buffers created here are born with a unique name (bufname) but then reassociated
-    ;; with the git filename, but they are not truly visiting those (usually non-existent) files.
-    ;; (The buffer needs a file name so that set-auto-mode can choose a mode; we can't then
-    ;; remove the buffers' file name because the major mode may rely on it. For example, eglot's
-    ;; file-close hooks will fail if the buffer no longer has a file name.)
-    (or (get-buffer bufname)
+    ;; The buffers created here are "visiting" the non-existent file
+    ;; name bufname, which has the Git file name (filename) as a
+    ;; suffix, so that, for example, set-auto-mode can choose an
+    ;; appropriate mode for it. Buffer names are abbreviated to the
+    ;; base name and disambiguated as usual by a suffix such as
+    ;; foo.c<2> or foo.c<parent-dir>, which in this case is the
+    ;; revision. We must not un-visit the file after the mode is set,
+    ;; because shutdown hooks installed by the mode may rely on the
+    ;; buffer continuing to have a file name.
+    ;;
+    ;; TODO: consider replacing this by a GitHub API-based
+    ;; file-name-handler, so that ediff can simply open the file.
+    (or (find-buffer-visiting bufname)
 	(with-current-buffer (create-file-buffer bufname)
-          (setq buffer-file-name filename)
+	  (set-visited-file-name bufname)
 
 	  ;; Decode body of HTTP response into current buffer.
 	  (let* ((url-buf
@@ -276,7 +284,7 @@ removing HTTP headers, and calling `url-insert' to decode the body."
     (setq url-request-extra-headers nil)))
 
 (defun github--ediff-redraw (meta-list)
-  ;; This is a setup function for .github--ediff-compare.
+  ;; This is the meta-buffer redraw function for .github--ediff-compare.
   ;; It is analogous to `ediff-redraw-directory-group-buffer` in `ediff-directories'.
   ;; It must return the meta-buffer.
   ;;
@@ -293,8 +301,27 @@ removing HTTP headers, and calling `url-insert' to decode the body."
 	first-parent-chain)
     (ediff-with-current-buffer meta-buf
       (setq point (point))
+      (setq buffer-read-only nil)
       (erase-buffer)
       (mapc #'delete-overlay (overlays-in 1 1)) ; remove stale overlays
+
+      ;; Help message (? toggles verbosity)
+      (if ediff-verbose-help-enabled
+	  (insert "GitHub Ediff Session Group Panel
+
+ Useful commands (type ? to hide them and free up screen):
+      button2, v, or RET over session record:   start that Ediff session
+      R:\tdisplay the registry of active Ediff sessions
+  n,SPC:\tnext session
+  p,DEL:\tprevious session
+      E:\tbrowse Ediff manual
+      q:\tquit this session group
+")
+	(insert "GitHub Ediff Session Group Panel
+
+      Type ? to show useful commands in this buffer.
+"))
+
       (insert "\n" description "\n")
 
       ;; Populate the first-parent chain of commits.
