@@ -85,8 +85,9 @@ the commit or pull request identified by a GitHub `url'."
 			       (format "PR#%s: %s\n\n%s"
 				       index
 				       (alist-get 'title pull)
-				       (replace-regexp-in-string "\r" "" (alist-get 'body pull))))))
-
+				       (replace-regexp-in-string "\r"
+								 ""
+								 (or (alist-get 'body pull) ""))))))
      ;; Standalone commit, https://github.com/OWNER/REPO/commit/HASH
      ((string-match "https://github.com/\\(.*\\)/\\(.*\\)/commit/\\([0-9a-f]+\\)$" url)
       (let* ((owner (match-string 1 url))
